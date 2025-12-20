@@ -1,3 +1,5 @@
 ./venv
 ./data
 ./models
+./.idea
+.DS_Store
