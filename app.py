@@ -6,6 +6,7 @@ from tensorflow.keras.models import load_model
 from PIL import Image
 import time
 
+
 # Safe model loading
 def safe_load_model(model_path):
     try:
@@ -13,10 +14,10 @@ def safe_load_model(model_path):
     except Exception as e:
         return None
 
+
 # Load models
 drowsiness_model = safe_load_model('models/fl3d_model_whts_3.h5')
-emotion_model = safe_load_model('affectnet_model_whts_2.h5')streamlit run app.py
-
+emotion_model = safe_load_model('models/affectnet_model_whts_2.h5')
 
 # Labels
 drowsiness_labels = ['alert', 'microsleep', 'yawning']
@@ -28,8 +29,8 @@ emotion_scores = {'neutral': 0, 'happy': 1, 'sad': -1, 'angry': -1}
 
 # Safety matrix
 safety_matrix = {
-    'alert':    {'angry': 'Neutral', 'happy': 'Safe',    'neutral': 'Safe',    'sad': 'Neutral'},
-    'yawning':  {'angry': 'Unsafe',  'happy': 'Neutral', 'neutral': 'Neutral', 'sad': 'Unsafe'},
+    'alert': {'angry': 'Neutral', 'happy': 'Safe', 'neutral': 'Safe', 'sad': 'Neutral'},
+    'yawning': {'angry': 'Unsafe', 'happy': 'Neutral', 'neutral': 'Neutral', 'sad': 'Unsafe'},
     'microsleep': {'angry': 'Unsafe', 'happy': 'Unsafe', 'neutral': 'Unsafe', 'sad': 'Unsafe'}
 }
 
@@ -48,7 +49,9 @@ st.markdown("""
 
 # Title
 st.markdown('<div class="title">EMOTE-ION</div>', unsafe_allow_html=True)
-st.markdown('<div class="desc">Experience real-time drowsiness and emotion detection using advanced AI models. Click below to start the demo.</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="desc">Experience real-time drowsiness and emotion detection using advanced AI models. Click below to start the demo.</div>',
+    unsafe_allow_html=True)
 
 # Buttons
 col1, col2 = st.columns(2)
@@ -79,12 +82,12 @@ if st.session_state.camera_active:
         if not ret:
             st.error("Failed to access camera")
             break
-        
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(30, 30))
 
         for (x, y, w, h) in faces:
-            face = gray[y:y+h, x:x+w]
+            face = gray[y:y + h, x:x + w]
             face_resized = cv2.resize(face, (48, 48))
             face_resized = np.expand_dims(face_resized, axis=-1)
             face_resized = np.expand_dims(face_resized, axis=0) / 255.0
@@ -107,14 +110,16 @@ if st.session_state.camera_active:
                 S = 0
 
             # Drawing
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            cv2.putText(frame, f"Drowsiness: {drowsiness_label}", (x, y-50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            cv2.putText(frame, f"Emotion: {emotion_label}", (x, y-30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-            cv2.putText(frame, f"Safety: {safety_state} (S={S:.2f})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.putText(frame, f"Drowsiness: {drowsiness_label}", (x, y - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (0, 255, 0), 2)
+            cv2.putText(frame, f"Emotion: {emotion_label}", (x, y - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+            cv2.putText(frame, f"Safety: {safety_state} (S={S:.2f})", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (0, 255, 255), 2)
 
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_placeholder.image(frame, channels="RGB")
-    
+
     cap.release()
     cv2.destroyAllWindows()
 elif st.session_state.show_thanks:
