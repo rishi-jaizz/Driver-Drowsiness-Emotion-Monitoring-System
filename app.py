@@ -4,6 +4,9 @@ import numpy as np
 from tensorflow.keras.models import load_model
 import time
 
+# ── Must be the very first Streamlit command ───────────────────────────────────
+st.set_page_config(page_title="EMOTE-ION", layout="centered")
+
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 @st.cache_resource
@@ -38,8 +41,7 @@ face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
 )
 
-# ── Page config & styles ──────────────────────────────────────────────────────
-st.set_page_config(page_title="EMOTE-ION", layout="centered")
+# ── Page styles ───────────────────────────────────────────────────────────────
 st.markdown("""
     <style>
         body { background-color: #03040B; color: #909398; }
