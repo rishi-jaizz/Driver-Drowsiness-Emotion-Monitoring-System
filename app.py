@@ -8,8 +8,8 @@ st.set_page_config(page_title="Driver State Monitor",
                    page_icon="🚗",
                    layout="wide")
 
-drowsiness_model = load_model('fl3d_model_whts_3.h5')
-emotion_model    = load_model('affectnet_model_whts_2.h5')
+drowsiness_model = load_model('models/fl3d_model_whts_3.h5')
+emotion_model    = load_model('models/affectnet_model_whts_2.h5')
 
 drowsiness_labels = ['alert', 'microsleep', 'yawning']
 emotion_labels    = ['angry', 'happy', 'neutral', 'sad']
