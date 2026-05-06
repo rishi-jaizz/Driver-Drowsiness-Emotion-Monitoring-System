@@ -2,9 +2,8 @@ import streamlit as st
 import cv2
 import numpy as np
 from tensorflow.keras.models import load_model
-import time
 
-# ── Must be the very first Streamlit command ───────────────────────────────────
+# ── Must be the very first Streamlit command ──────────────────────────────────
 st.set_page_config(page_title="EMOTE-ION", layout="centered")
 
 
@@ -33,7 +32,6 @@ safety_matrix = {
     'yawning':    {'angry': 'Unsafe',  'happy': 'Neutral', 'neutral': 'Neutral', 'sad': 'Unsafe'},
     'microsleep': {'angry': 'Unsafe',  'happy': 'Unsafe',  'neutral': 'Unsafe',  'sad': 'Unsafe'},
 }
-
 safety_colors = {'Safe': '🟢', 'Neutral': '🟡', 'Unsafe': '🔴', 'N/A': '⚪'}
 
 # ── Face detector ─────────────────────────────────────────────────────────────
@@ -44,9 +42,8 @@ face_cascade = cv2.CascadeClassifier(
 # ── Page styles ───────────────────────────────────────────────────────────────
 st.markdown("""
     <style>
-        body { background-color: #03040B; color: #909398; }
-        .title { font-size: 55px; color: #ffffff; font-weight: bold; }
-        .desc  { font-size: 18px; color: #909398; margin-bottom: 20px; }
+        .title { font-size: 52px; color: #ffffff; font-weight: bold; letter-spacing: -1px; }
+        .desc  { font-size: 16px; color: #909398; margin-bottom: 20px; }
         div[data-testid="metric-container"] {
             background: #111827;
             border: 1px solid #1f2937;
@@ -58,39 +55,41 @@ st.markdown("""
 
 st.markdown('<div class="title">EMOTE-ION</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="desc">Real-time driver drowsiness & emotion monitoring. '
-    'Allow camera access when prompted, then click <b>▶ Start</b>.</div>',
+    '<div class="desc">Real-time driver drowsiness & emotion monitoring powered by AI. '
+    'Click <b>▶ Start Demo</b>, allow camera access, then click <b>Take Photo</b> to analyse.</div>',
     unsafe_allow_html=True
 )
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "running" not in st.session_state:
     st.session_state.running = False
+if "capture_count" not in st.session_state:
+    st.session_state.capture_count = 0
 
+# ── Control buttons ───────────────────────────────────────────────────────────
 col1, col2 = st.columns(2)
 with col1:
     if st.button("▶ Start Demo", use_container_width=True, type="primary"):
         st.session_state.running = True
+        st.session_state.capture_count += 1
 with col2:
     if st.button("⏹ Stop Demo", use_container_width=True):
         st.session_state.running = False
         st.rerun()
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
+# ── Main demo ─────────────────────────────────────────────────────────────────
 if st.session_state.running:
-    st.info("📷 Camera active — allow browser camera access if prompted.")
+    st.info("📷 Allow camera access when prompted, then click **Take Photo** below the feed.")
 
-    # st.camera_input captures a single frame from the browser webcam
+    # Stable key tied to capture_count — only changes when user clicks "Capture Next"
     img_file = st.camera_input(
         label="Live feed",
         label_visibility="collapsed",
-        key=f"cam_{int(time.time())}"   # rotating key forces a new snapshot each rerun
+        key=f"cam_{st.session_state.capture_count}"
     )
 
-    metrics_placeholder = st.empty()
-
     if img_file is not None:
-        # Decode image
+        # ── Decode image ──────────────────────────────────────────────────────
         file_bytes = np.frombuffer(img_file.read(), dtype=np.uint8)
         frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
@@ -121,7 +120,7 @@ if st.session_state.running:
                 S = D + 0.7 * E
                 safety_state = safety_matrix[drowsiness_label][emotion_label]
 
-            # Annotate frame
+            # ── Annotate frame ────────────────────────────────────────────────
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
             cv2.putText(frame, f"Drowsiness: {drowsiness_label}",
                         (x, y - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
@@ -130,26 +129,33 @@ if st.session_state.running:
             cv2.putText(frame, f"Safety: {safety_state} (S={S:.2f})",
                         (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 255), 2)
 
-        # Show annotated frame
-        st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
-
-        # Show metrics
-        icon = safety_colors.get(safety_state, '⚪')
-        with metrics_placeholder.container():
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("👁 Drowsiness",  drowsiness_label)
-            m2.metric("😐 Emotion",     emotion_label)
-            m3.metric("🛡 Safety",      f"{icon} {safety_state}")
-            m4.metric("📊 Score (S)",   f"{S:.2f}")
+        # ── Show annotated result ─────────────────────────────────────────────
+        st.image(
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+            channels="RGB",
+            use_container_width=True,
+            caption="Analysed frame"
+        )
 
         if len(faces) == 0:
-            st.warning("⚠️ No face detected — ensure your face is well-lit and centred.")
+            st.warning("⚠️ No face detected — ensure your face is well-lit and centred in frame.")
 
-    # Auto-refresh every second for continuous monitoring
-    time.sleep(1)
-    st.rerun()
+        # ── Metrics dashboard ─────────────────────────────────────────────────
+        icon = safety_colors.get(safety_state, '⚪')
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("👁 Drowsiness",  drowsiness_label)
+        m2.metric("😐 Emotion",     emotion_label)
+        m3.metric("🛡 Safety",      f"{icon} {safety_state}")
+        m4.metric("📊 Score (S)",   f"{S:.2f}")
 
-elif not st.session_state.running:
+        st.divider()
+
+        # ── Next capture button ───────────────────────────────────────────────
+        if st.button("📸 Capture Next Frame", type="primary", use_container_width=True):
+            st.session_state.capture_count += 1
+            st.rerun()
+
+else:
     st.markdown(
         "<h4 style='color:#909398; text-align:center; margin-top:40px;'>"
         "Press ▶ Start Demo to begin monitoring.</h4>",
