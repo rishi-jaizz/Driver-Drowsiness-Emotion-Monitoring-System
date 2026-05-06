@@ -1,5 +1,19 @@
-./venv
-./data
-./models
-./.idea
+# Virtual environments
+venv/
+.venv/
+.venv311/
+
+# Datasets & model weights (large files)
+data/
+models/
+
+# IDE & OS files
+.idea/
+.devcontainer/
 .DS_Store
+**/.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
