@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from tensorflow.keras.models import load_model
 import threading
+import concurrent.futures
 import av
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
@@ -36,13 +37,28 @@ safety_matrix = {
     'microsleep': {'angry': 'Unsafe',  'happy': 'Unsafe',  'neutral': 'Unsafe',  'sad': 'Unsafe'},
 }
 
-# ── Face detector ─────────────────────────────────────────────────────────────
+# ── Face detector & thread pool ───────────────────────────────────────────────
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
 )
+# Single-worker pool so inference never runs concurrently (TF isn't thread-safe)
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+_model_lock = threading.Lock()
 
-# ── Thread-safe inference lock ────────────────────────────────────────────────
-model_lock = threading.Lock()
+
+def _run_inference(face_in: np.ndarray):
+    """Runs model inference in a background thread."""
+    with _model_lock:
+        d_pred = drowsiness_model.predict(face_in, verbose=0)
+        e_pred = emotion_model.predict(face_in, verbose=0)
+    d_label = drowsiness_labels[np.argmax(d_pred)]
+    e_label = emotion_labels[np.argmax(e_pred)]
+    D = drowsiness_scores.get(d_label, 0)
+    E = emotion_scores.get(e_label, 0)
+    S = D + 0.7 * E
+    safety = safety_matrix[d_label][e_label]
+    return d_label, e_label, safety, S
+
 
 # ── Page styles ───────────────────────────────────────────────────────────────
 st.markdown("""
@@ -83,51 +99,66 @@ with col2:
         st.rerun()
 
 
-# ── Video processor class ─────────────────────────────────────────────────────
+# ── Video processor ───────────────────────────────────────────────────────────
 class VideoProcessor:
+    """
+    Non-blocking video processor:
+    - Face detection runs on a downscaled frame every frame (fast, CPU-cheap)
+    - Model inference runs in a background thread; latest result is cached
+    - Video frames are NEVER blocked waiting for inference
+    """
+
     def __init__(self):
-        self._frame_count = 0
-        self._last_drowsiness = "N/A"
-        self._last_emotion    = "N/A"
-        self._last_safety     = "N/A"
-        self._last_S          = 0.0
+        self._future: concurrent.futures.Future | None = None
+        self._last = ("N/A", "N/A", "N/A", 0.0)   # (drowsiness, emotion, safety, S)
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        img  = frame.to_ndarray(format="bgr24")
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = frame.to_ndarray(format="bgr24")
+        h_orig, w_orig = img.shape[:2]
+
+        # ── Scale down for faster face detection ──────────────────────────────
+        scale = 0.5
+        small = cv2.resize(img, (int(w_orig * scale), int(h_orig * scale)))
+        gray_small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
         faces = face_cascade.detectMultiScale(
-            gray, scaleFactor=1.3, minNeighbors=5, minSize=(30, 30)
+            gray_small, scaleFactor=1.3, minNeighbors=5, minSize=(20, 20)
         )
 
-        self._frame_count += 1
-        run_inference = (self._frame_count % 5 == 0)  # infer every 5th frame
+        for (sx, sy, sw, sh) in faces:
+            # Map coordinates back to original resolution
+            x, y, w, h = (
+                int(sx / scale), int(sy / scale),
+                int(sw / scale), int(sh / scale)
+            )
 
-        for (x, y, w, h) in faces:
-            if run_inference and drowsiness_model and emotion_model:
-                face_roi = gray[y:y + h, x:x + w]
+            # ── Non-blocking inference ────────────────────────────────────────
+            # Collect result if previous inference finished
+            if self._future is not None and self._future.done():
+                try:
+                    self._last = self._future.result()
+                except Exception:
+                    pass
+                self._future = None
+
+            # Submit new inference only if no job is running
+            if self._future is None and drowsiness_model and emotion_model:
+                face_roi = cv2.cvtColor(img[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY)
                 face_in  = np.expand_dims(
                     np.expand_dims(cv2.resize(face_roi, (48, 48)), axis=-1),
                     axis=0
                 ) / 255.0
+                self._future = _executor.submit(_run_inference, face_in)
 
-                with model_lock:
-                    d_pred = drowsiness_model.predict(face_in, verbose=0)
-                    e_pred = emotion_model.predict(face_in, verbose=0)
+            d_label, e_label, safety, S = self._last
 
-                self._last_drowsiness = drowsiness_labels[np.argmax(d_pred)]
-                self._last_emotion    = emotion_labels[np.argmax(e_pred)]
-                D = drowsiness_scores.get(self._last_drowsiness, 0)
-                E = emotion_scores.get(self._last_emotion, 0)
-                self._last_S      = D + 0.7 * E
-                self._last_safety = safety_matrix[self._last_drowsiness][self._last_emotion]
-
-            # Draw annotations using cached last result
+            # ── Annotate frame ────────────────────────────────────────────────
             cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(img, f"Drowsiness: {self._last_drowsiness}",
+            cv2.putText(img, f"Drowsiness: {d_label}",
                         (x, y - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            cv2.putText(img, f"Emotion: {self._last_emotion}",
+            cv2.putText(img, f"Emotion: {e_label}",
                         (x, y - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 120, 0), 2)
-            cv2.putText(img, f"Safety: {self._last_safety} (S={self._last_S:.2f})",
+            cv2.putText(img, f"Safety: {safety} (S={S:.2f})",
                         (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 255), 2)
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
@@ -142,7 +173,14 @@ if st.session_state.running:
             "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
         }),
         video_processor_factory=VideoProcessor,
-        media_stream_constraints={"video": True, "audio": False},
+        media_stream_constraints={
+            "video": {
+                "width":  {"ideal": 640, "max": 640},
+                "height": {"ideal": 480, "max": 480},
+                "frameRate": {"ideal": 15, "max": 20},
+            },
+            "audio": False,
+        },
         async_processing=True,
     )
 else:
