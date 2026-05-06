@@ -1,126 +1,155 @@
 import streamlit as st
 import cv2
 import numpy as np
-import tensorflow as tf
 from tensorflow.keras.models import load_model
-from PIL import Image
 import time
 
 
-# Safe model loading
-def safe_load_model(model_path):
-    try:
-        return load_model(model_path)
-    except Exception as e:
-        return None
+# ── Model loading ─────────────────────────────────────────────────────────────
+@st.cache_resource
+def load_models():
+    def safe_load(path):
+        try:
+            return load_model(path)
+        except Exception:
+            return None
+    return safe_load('models/fl3d_model_whts_3.h5'), safe_load('models/affectnet_model_whts_2.h5')
 
 
-# Load models
-drowsiness_model = safe_load_model('models/fl3d_model_whts_3.h5')
-emotion_model = safe_load_model('models/affectnet_model_whts_2.h5')
+drowsiness_model, emotion_model = load_models()
 
-# Labels
+# ── Labels & scoring ──────────────────────────────────────────────────────────
 drowsiness_labels = ['alert', 'microsleep', 'yawning']
-emotion_labels = ['angry', 'happy', 'neutral', 'sad']
+emotion_labels    = ['angry', 'happy', 'neutral', 'sad']
 
-# Risk scores
 drowsiness_scores = {'alert': 1, 'yawning': 0, 'microsleep': -1}
-emotion_scores = {'neutral': 0, 'happy': 1, 'sad': -1, 'angry': -1}
+emotion_scores    = {'neutral': 0, 'happy': 1, 'sad': -1, 'angry': -1}
 
-# Safety matrix
 safety_matrix = {
-    'alert': {'angry': 'Neutral', 'happy': 'Safe', 'neutral': 'Safe', 'sad': 'Neutral'},
-    'yawning': {'angry': 'Unsafe', 'happy': 'Neutral', 'neutral': 'Neutral', 'sad': 'Unsafe'},
-    'microsleep': {'angry': 'Unsafe', 'happy': 'Unsafe', 'neutral': 'Unsafe', 'sad': 'Unsafe'}
+    'alert':      {'angry': 'Neutral', 'happy': 'Safe',    'neutral': 'Safe',    'sad': 'Neutral'},
+    'yawning':    {'angry': 'Unsafe',  'happy': 'Neutral', 'neutral': 'Neutral', 'sad': 'Unsafe'},
+    'microsleep': {'angry': 'Unsafe',  'happy': 'Unsafe',  'neutral': 'Unsafe',  'sad': 'Unsafe'},
 }
 
-# Face detector
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+safety_colors = {'Safe': '🟢', 'Neutral': '🟡', 'Unsafe': '🔴', 'N/A': '⚪'}
 
-# UI styling
+# ── Face detector ─────────────────────────────────────────────────────────────
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+)
+
+# ── Page config & styles ──────────────────────────────────────────────────────
 st.set_page_config(page_title="EMOTE-ION", layout="centered")
 st.markdown("""
     <style>
         body { background-color: #03040B; color: #909398; }
-        .title { font-size: 55px; color: #ffffff; font-weight: bold; display: flex; align-items: center; }
-        .desc { font-size: 24px; color: #909398; margin-bottom: 20px; }
+        .title { font-size: 55px; color: #ffffff; font-weight: bold; }
+        .desc  { font-size: 18px; color: #909398; margin-bottom: 20px; }
+        div[data-testid="metric-container"] {
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 10px;
+            padding: 12px 16px;
+        }
     </style>
 """, unsafe_allow_html=True)
 
-# Title
 st.markdown('<div class="title">EMOTE-ION</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="desc">Experience real-time drowsiness and emotion detection using advanced AI models. Click below to start the demo.</div>',
-    unsafe_allow_html=True)
+    '<div class="desc">Real-time driver drowsiness & emotion monitoring. '
+    'Allow camera access when prompted, then click <b>▶ Start</b>.</div>',
+    unsafe_allow_html=True
+)
 
-# Buttons
+# ── Session state ─────────────────────────────────────────────────────────────
+if "running" not in st.session_state:
+    st.session_state.running = False
+
 col1, col2 = st.columns(2)
 with col1:
-    start_demo = st.button("Let's Start the Demo")
+    if st.button("▶ Start Demo", use_container_width=True, type="primary"):
+        st.session_state.running = True
 with col2:
-    stop_demo = st.button("Stop Demo")
+    if st.button("⏹ Stop Demo", use_container_width=True):
+        st.session_state.running = False
+        st.rerun()
 
-# State tracking
-if "camera_active" not in st.session_state:
-    st.session_state.camera_active = False
-    st.session_state.show_thanks = False
+# ── Main loop ─────────────────────────────────────────────────────────────────
+if st.session_state.running:
+    st.info("📷 Camera active — allow browser camera access if prompted.")
 
-if start_demo:
-    st.session_state.camera_active = True
-    st.session_state.show_thanks = False
-if stop_demo:
-    st.session_state.camera_active = False
-    st.session_state.show_thanks = True
-    st.rerun()
+    # st.camera_input captures a single frame from the browser webcam
+    img_file = st.camera_input(
+        label="Live feed",
+        label_visibility="collapsed",
+        key=f"cam_{int(time.time())}"   # rotating key forces a new snapshot each rerun
+    )
 
-frame_placeholder = st.empty()
+    metrics_placeholder = st.empty()
 
-if st.session_state.camera_active:
-    cap = cv2.VideoCapture(0)
-    while st.session_state.camera_active:
-        ret, frame = cap.read()
-        if not ret:
-            st.error("Failed to access camera")
-            break
+    if img_file is not None:
+        # Decode image
+        file_bytes = np.frombuffer(img_file.read(), dtype=np.uint8)
+        frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(30, 30))
+        gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(
+            gray, scaleFactor=1.3, minNeighbors=5, minSize=(30, 30)
+        )
+
+        drowsiness_label = emotion_label = safety_state = "N/A"
+        S = 0.0
 
         for (x, y, w, h) in faces:
-            face = gray[y:y + h, x:x + w]
-            face_resized = cv2.resize(face, (48, 48))
-            face_resized = np.expand_dims(face_resized, axis=-1)
-            face_resized = np.expand_dims(face_resized, axis=0) / 255.0
+            face_roi = gray[y:y + h, x:x + w]
+            face_in  = np.expand_dims(
+                np.expand_dims(cv2.resize(face_roi, (48, 48)), axis=-1),
+                axis=0
+            ) / 255.0
 
             if drowsiness_model and emotion_model:
-                drowsiness_pred = drowsiness_model.predict(face_resized)
-                drowsiness_label = drowsiness_labels[np.argmax(drowsiness_pred)]
-
-                emotion_pred = emotion_model.predict(face_resized)
-                emotion_label = emotion_labels[np.argmax(emotion_pred)]
-
-                # Safety Score Calculation
+                drowsiness_label = drowsiness_labels[
+                    np.argmax(drowsiness_model.predict(face_in, verbose=0))
+                ]
+                emotion_label = emotion_labels[
+                    np.argmax(emotion_model.predict(face_in, verbose=0))
+                ]
                 D = drowsiness_scores.get(drowsiness_label, 0)
                 E = emotion_scores.get(emotion_label, 0)
                 S = D + 0.7 * E
                 safety_state = safety_matrix[drowsiness_label][emotion_label]
 
-            else:
-                drowsiness_label = emotion_label = safety_state = "N/A"
-                S = 0
-
-            # Drawing
+            # Annotate frame
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(frame, f"Drowsiness: {drowsiness_label}", (x, y - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                        (0, 255, 0), 2)
-            cv2.putText(frame, f"Emotion: {emotion_label}", (x, y - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-            cv2.putText(frame, f"Safety: {safety_state} (S={S:.2f})", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                        (0, 255, 255), 2)
+            cv2.putText(frame, f"Drowsiness: {drowsiness_label}",
+                        (x, y - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.putText(frame, f"Emotion: {emotion_label}",
+                        (x, y - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 120, 0), 2)
+            cv2.putText(frame, f"Safety: {safety_state} (S={S:.2f})",
+                        (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 255), 2)
 
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_placeholder.image(frame, channels="RGB")
+        # Show annotated frame
+        st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
 
-    cap.release()
-    cv2.destroyAllWindows()
-elif st.session_state.show_thanks:
-    st.markdown("<h3 style='color:#ffffff;'>Thanks for Trying</h3>", unsafe_allow_html=True)
+        # Show metrics
+        icon = safety_colors.get(safety_state, '⚪')
+        with metrics_placeholder.container():
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("👁 Drowsiness",  drowsiness_label)
+            m2.metric("😐 Emotion",     emotion_label)
+            m3.metric("🛡 Safety",      f"{icon} {safety_state}")
+            m4.metric("📊 Score (S)",   f"{S:.2f}")
+
+        if len(faces) == 0:
+            st.warning("⚠️ No face detected — ensure your face is well-lit and centred.")
+
+    # Auto-refresh every second for continuous monitoring
+    time.sleep(1)
+    st.rerun()
+
+elif not st.session_state.running:
+    st.markdown(
+        "<h4 style='color:#909398; text-align:center; margin-top:40px;'>"
+        "Press ▶ Start Demo to begin monitoring.</h4>",
+        unsafe_allow_html=True
+    )
